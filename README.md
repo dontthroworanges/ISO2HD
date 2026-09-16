@@ -15,7 +15,7 @@ So I present to you ISO2HD, a Windows PowerShell based tool with a simple GUI to
 
 All that being said, if you've come across this tool while searching for something that can get you installing operating systems on your non-uefi retro PCs from hard drive, then feel free to give this a try!
 
-> I have successfully installed iAtkos v7 and OSXx86 10.4.11 on my Socket 774 Asrock motherboard using drives made with ISO2HD. 
+> I have successfully installed iAtkos v7 and OSXx86 10.4.11 on my Socket 775 Asrock motherboard using drives made with ISO2HD. 
 
 ### Screenshot
 ![Screenshot of the ISO2HD user interface](/ISO2HD_Screenshot.png)
