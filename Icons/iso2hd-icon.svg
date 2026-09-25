@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <title>ISO2HD</title>
+  <!-- Same family as the TIFF2PDF icon: magenta source behind, white/ice target in front, blue badge. -->
+  <defs>
+    <!-- Disc (source format): purple/magenta -->
+    <linearGradient id="back" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#E25AC9"/>
+      <stop offset="1" stop-color="#8E2DA8"/>
+    </linearGradient>
+    <!-- Hard drive (target): white/ice -->
+    <linearGradient id="front" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#E4EEFD"/>
+    </linearGradient>
+    <radialGradient id="platter" cx="0.42" cy="0.38" r="0.7">
+      <stop offset="0" stop-color="#F4F8FF"/>
+      <stop offset="1" stop-color="#BFD4F4"/>
+    </radialGradient>
+    <linearGradient id="badge" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3B9CFA"/>
+      <stop offset="1" stop-color="#1450B4"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="4" stdDeviation="4.5" flood-color="#0A2A6B" flood-opacity="0.30"/>
+    </filter>
+    <filter id="shadowSm" x="-30%" y="-30%" width="160%" height="170%">
+      <feDropShadow dx="0" dy="3" stdDeviation="3.5" flood-color="#0A2A6B" flood-opacity="0.38"/>
+    </filter>
+  </defs>
+
+  <!-- Artwork authored around 38..212 x 56..215; scaled to fill the canvas -->
+  <g transform="translate(128 128) scale(1.25) translate(-126 -135.5)">
+
+    <!-- Disc (source) -->
+    <g filter="url(#shadow)">
+      <circle cx="96" cy="114" r="58" fill="url(#back)"/>
+    </g>
+    <circle cx="96" cy="114" r="46" fill="none" stroke="#FFFFFF" stroke-opacity="0.16" stroke-width="2"/>
+    <circle cx="96" cy="114" r="36" fill="none" stroke="#FFFFFF" stroke-opacity="0.12" stroke-width="2"/>
+    <path d="M96,114 L62.7,66.5 A58,58 0 0 1 115.8,59.5 Z" fill="#FFFFFF" fill-opacity="0.24"/>
+    <circle cx="96" cy="114" r="19" fill="#F6DDF3"/>
+    <circle cx="96" cy="114" r="19" fill="none" stroke="#5E1B75" stroke-opacity="0.25" stroke-width="1.5"/>
+    <circle cx="96" cy="114" r="7" fill="#5E1B75" fill-opacity="0.75"/>
+
+    <!-- Hard drive (target) -->
+    <g filter="url(#shadow)">
+      <rect x="112" y="72" width="100" height="132" rx="12" fill="url(#front)" stroke="#8FB2E6" stroke-width="1.5"/>
+    </g>
+    <circle cx="121.5" cy="81.5" r="3" fill="#B8CEF3"/>
+    <circle cx="202.5" cy="81.5" r="3" fill="#B8CEF3"/>
+    <circle cx="162" cy="124" r="36" fill="url(#platter)" stroke="#9DBDEB" stroke-width="1.5"/>
+    <circle cx="162" cy="124" r="24" fill="none" stroke="#FFFFFF" stroke-opacity="0.8" stroke-width="1.5"/>
+    <circle cx="162" cy="124" r="8" fill="#2B7CD3"/>
+    <!-- Read/write arm -->
+    <path d="M198,186 L175,146" fill="none" stroke="#2B7CD3" stroke-width="7" stroke-linecap="round"/>
+    <circle cx="198" cy="186" r="8" fill="#9DBDEB"/>
+    <circle cx="198" cy="186" r="3.5" fill="#2B7CD3"/>
+
+    <!-- Write badge -->
+    <g filter="url(#shadowSm)">
+      <circle cx="128" cy="184" r="31" fill="url(#badge)" stroke="#FFFFFF" stroke-width="3"/>
+    </g>
+    <g fill="none" stroke="#FFFFFF" stroke-width="6" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M113,184 H143 M131,172 L143,184 L131,196"/>
+    </g>
+  </g>
+</svg>

@@ -57,11 +57,17 @@
     .\ISO2HD.ps1 -IsoPath D:\images\tiger.iso -OutFile D:\vm\tiger-hdd.img
     Writes exactly what would go on a drive into an image file instead, for
     virtual machines or testing. Does not need Administrator rights.
+
+.NOTES
+    The ISO2HD app (ISO2HD.exe) runs this script with -Json (drive list and
+    image details as JSON) and -ReportStatus (progress lines while writing).
 #>
 [CmdletBinding(DefaultParameterSetName = 'Gui')]
 param(
+    # With -ListDisks: the image to be written; the drive holding it is marked as not eligible.
     [Parameter(ParameterSetName = 'Cli', Mandatory = $true)]
     [Parameter(ParameterSetName = 'Export', Mandatory = $true)]
+    [Parameter(ParameterSetName = 'List')]
     [string]$IsoPath,
 
     [Parameter(ParameterSetName = 'Cli', Mandatory = $true)]
@@ -89,14 +95,30 @@ param(
     [Parameter(ParameterSetName = 'Cli')]
     [switch]$Force,
 
+    # Print the log as plain lines plus "##PROGRESS|<percent>|<phase>|<status>", "##WAIT|start" /
+    # "##WAIT|end" (waiting for the drive to respond) and, on success, "##RESULT|<json>".
+    # Exit code 0 = written, 1 = failed, 2 = cancelled.
+    [Parameter(ParameterSetName = 'Cli')]
+    [switch]$ReportStatus,
+
+    # Name of an event that cancels the write when it is set (used with -ReportStatus).
+    [Parameter(ParameterSetName = 'Cli')]
+    [string]$CancelEvent,
+
     [Parameter(ParameterSetName = 'List', Mandatory = $true)]
     [switch]$ListDisks,
 
     [Parameter(ParameterSetName = 'Inspect', Mandatory = $true)]
-    [string]$Inspect
+    [string]$Inspect,
+
+    # Output -ListDisks / -Inspect as JSON; on failure, {"Error": "<message>"} and exit code 1.
+    [Parameter(ParameterSetName = 'List')]
+    [Parameter(ParameterSetName = 'Inspect')]
+    [switch]$Json
 )
 
 $ErrorActionPreference = 'Stop'
+if ([Console]::IsOutputRedirected) { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false) }
 
 # ---------------------------------------------------------------------------
 # Engine. Kept in a script block so the GUI can load it into a background
@@ -460,6 +482,7 @@ public static class IsoDiskProbe
         param([hashtable]$State, [string]$Message, [string]$Level = 'INFO')
         $line = '[{0:HH:mm:ss}] {1,-5} {2}' -f (Get-Date), $Level, $Message
         if ($State -and $State.ContainsKey('Log') -and $State.Log) { $State.Log.Enqueue($line) }
+        if ($State -and $State.Report) { Write-Host $line }
         if ($State -and $State.Console) {
             $color = switch ($Level) { 'WARN' { 'Yellow' } 'ERROR' { 'Red' } 'OK' { 'Green' } default { 'Gray' } }
             Write-Host $line -ForegroundColor $color
@@ -482,6 +505,14 @@ public static class IsoDiskProbe
         $State.Percent = $pct
         $State.Status = $status
         if ($State.Console) { Write-Progress -Activity 'ISO2HD' -Status "$Phase - $status" -PercentComplete $pct }
+        if ($State.Report) { Write-Host "##PROGRESS|$pct|$Phase|$status" }
+    }
+
+    function Set-IsoWaiting {
+        # Marks the time spent waiting for a drive to answer, which the GUIs show as it goes.
+        param([hashtable]$State, [bool]$Waiting)
+        if ($Waiting) { $State.WaitingSince = [DateTime]::UtcNow } else { $State.WaitingSince = $null }
+        if ($State.Report) { Write-Host "##WAIT|$(if ($Waiting) { 'start' } else { 'end' })" }
     }
 
     function Get-IsoPathDiskNumbers {
@@ -1006,7 +1037,7 @@ public static class IsoDiskProbe
                 # A drive that has idled - common with USB adapters - can take a long time to answer
                 # its first command. Say so up front, and let the GUI show how long it has waited.
                 Write-IsoLog $State 'Preparing drive (a USB drive waking from power saving can take up to a minute to respond)...'
-                $State.WaitingSince = [DateTime]::UtcNow
+                Set-IsoWaiting $State $true
                 $wait = [Diagnostics.Stopwatch]::StartNew()
                 $dev = [IsoRawDevice]::new("\\.\PhysicalDrive$DiskNumber", $true)
                 $diskBytes = $dev.GetLength()
@@ -1029,7 +1060,7 @@ public static class IsoDiskProbe
                     $v.Dismount()
                     Write-IsoLog $State "Locked and dismounted $vp"
                 }
-                $State.WaitingSince = $null
+                Set-IsoWaiting $State $false
                 if ($wait.Elapsed.TotalSeconds -ge 2) {
                     Write-IsoLog $State ('Drive responded after {0:N0} s.' -f $wait.Elapsed.TotalSeconds) 'WARN'
                 }
@@ -1156,7 +1187,7 @@ public static class IsoDiskProbe
             if ($dev) { $dev.Dispose() }
             for ($i = $volumes.Count - 1; $i -ge 0; $i--) { $volumes[$i].Dispose() }
             if ($State.Console) { Write-Progress -Activity 'ISO2HD' -Completed }
-            $State.WaitingSince = $null
+            if ($State.WaitingSince) { Set-IsoWaiting $State $false }
             if (-not $ok) { Write-IsoLog $State "The target may now hold an incomplete image." 'WARN' }
             if (-not $OutFile) { [IsoDiskProbe]::UpdateDiskProperties($DiskNumber) }
         }
@@ -1600,11 +1631,50 @@ public sealed class IsoDeviceWatcher : NativeWindow, IDisposable
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+function Write-IsoJson {
+    # -Json output: the query's result, or {"Error": "..."} and exit code 1.
+    param([scriptblock]$Query)
+    try {
+        $value = & $Query
+    } catch {
+        ConvertTo-Json -InputObject @{ Error = $_.Exception.Message } -Compress
+        exit 1
+    }
+    ConvertTo-Json -InputObject $value -Compress -Depth 4
+}
+
+function Start-IsoCancelWatch {
+    # Sets $State.Cancel when the named event is set. The engine checks it between 1 MiB blocks.
+    param([string]$Name, [hashtable]$State)
+    $cancelEvent = [System.Threading.EventWaitHandle]::OpenExisting($Name)
+    $ps = [powershell]::Create()
+    [void]$ps.AddScript({
+            param($CancelEvent, $State)
+            while (-not $State.StopWatch) {
+                if ($CancelEvent.WaitOne(250)) { $State.Cancel = $true; break }
+            }
+        }).AddArgument($cancelEvent).AddArgument($State)
+    @{ PS = $ps; Async = $ps.BeginInvoke(); Event = $cancelEvent }
+}
+
 switch ($PSCmdlet.ParameterSetName) {
     'List' {
-        Get-IsoTargetDisk | Format-Table Number, Name, Size, BusType, LogicalSectorSize, PartitionStyle, Eligible, Reason -AutoSize
+        if ($Json) {
+            Write-IsoJson { , @(Get-IsoTargetDisk -ExcludePath $IsoPath) }
+            return
+        }
+        Get-IsoTargetDisk -ExcludePath $IsoPath |
+            Format-Table Number, Name, Size, BusType, LogicalSectorSize, PartitionStyle, Eligible, Reason -AutoSize
     }
     'Inspect' {
+        if ($Json) {
+            Write-IsoJson {
+                if (-not (Test-Path -LiteralPath $Inspect -PathType Leaf)) { throw "File not found: $Inspect" }
+                $info = Get-IsoInfo -Path $Inspect
+                $info | Select-Object * -ExcludeProperty BootPatch
+            }
+            return
+        }
         $info = Get-IsoInfo -Path $Inspect
         $info | Select-Object * -ExcludeProperty BootPatch | Format-List
         if ($info.BootPatch) { "BIOS boot fix ($($info.BootPatch.Kind)): $($info.BootPatch.Description)" }
@@ -1615,6 +1685,35 @@ switch ($PSCmdlet.ParameterSetName) {
             -BootPatch (-not $NoBootPatch) -State $state | Format-List
     }
     'Cli' {
+        if ($ReportStatus) {
+            # Run by the ISO2HD app, which has already asked for confirmation.
+            $state = [hashtable]::Synchronized(@{ Console = $false; Report = $true; Cancel = $false; StopWatch = $false })
+            $watch = $null
+            try {
+                if (-not (Test-IsAdmin)) { throw 'Writing to a drive requires Administrator rights.' }
+                if ($CancelEvent) { $watch = Start-IsoCancelWatch -Name $CancelEvent -State $state }
+                $r = Invoke-IsoImageWrite -IsoPath $IsoPath -DiskNumber $DiskNumber -Verify (-not $NoVerify) `
+                    -ZeroRemainder $ZeroRemainder.IsPresent -PadSectors $PadSectors -BootPatch (-not $NoBootPatch) -State $state
+                $summary = [pscustomobject]@{
+                    DiskName = $r.DiskName; BiosBootFix = $r.BiosBootFix; TrackSectors = $r.TrackSectors
+                    BytesWritten = $r.BytesWritten; ImageSha256 = $r.ImageSha256; TrackSha256 = $r.TrackSha256
+                    Verified = $r.Verified; Elapsed = $r.Elapsed.ToString('hh\:mm\:ss')
+                }
+                Write-Host "##RESULT|$(ConvertTo-Json -InputObject $summary -Compress)"
+            } catch {
+                if ($state.Cancel) { exit 2 }
+                Write-IsoLog $state $_.Exception.Message 'ERROR'
+                exit 1
+            } finally {
+                if ($watch) {
+                    $state.StopWatch = $true
+                    [void]$watch.PS.EndInvoke($watch.Async)
+                    $watch.PS.Dispose()
+                    $watch.Event.Dispose()
+                }
+            }
+            exit 0
+        }
         if (-not (Test-IsAdmin)) { throw 'Writing to a drive requires an elevated (Run as Administrator) PowerShell.' }
         $target = Get-IsoTargetDisk -ExcludePath $IsoPath | Where-Object Number -eq $DiskNumber
         if (-not $target) { throw "Disk $DiskNumber was not found." }

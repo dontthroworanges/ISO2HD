@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<UserControl
+    x:Class="Iso2Hd.PreferencesPanel"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <StackPanel Spacing="20">
+        <ToggleSwitch x:Name="VerifyToggle" Header="Verify"
+                      OnContent="Read the drive back after writing and compare SHA-256" OffContent="Don't verify" />
+
+        <StackPanel Spacing="6">
+            <ToggleSwitch x:Name="BootToggle" Header="BIOS boot fix"
+                          OnContent="Make the drive bootable when ISO2HD has a fix for the disc" OffContent="Write the image unmodified" />
+            <TextBlock Text="Discs that only boot from a CD (such as Darwin/x86 installers) need a PC boot record to start from a hard drive on a legacy BIOS. Only the first 512 bytes are replaced; everything else still matches the disc."
+                       Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                       TextWrapping="Wrap" />
+        </StackPanel>
+
+        <StackPanel Spacing="6">
+            <ToggleSwitch x:Name="ZeroToggle" Header="Rest of the drive"
+                          OnContent="Erase everything after the image (slow)" OffContent="Clear only the old partition data at the end" />
+            <TextBlock Text="Erasing the rest leaves the drive like blank media, but writes over the whole drive."
+                       Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                       TextWrapping="Wrap" />
+        </StackPanel>
+
+        <StackPanel Spacing="6">
+            <NumberBox x:Name="PadBox" Header="Extra pad sectors" Minimum="0" SmallChange="1" LargeChange="15"
+                       SpinButtonPlacementMode="Compact" HorizontalAlignment="Left" MinWidth="180" />
+            <TextBlock Text="Zero sectors (2048 bytes each) written after the image, like cdrecord -pad. Most discs don't need any."
+                       Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                       TextWrapping="Wrap" />
+        </StackPanel>
+
+        <ToggleSwitch x:Name="OutputToggle" Header="Output section"
+                      OnContent="Show when the app starts" OffContent="Hide when the app starts" />
+    </StackPanel>
+</UserControl>

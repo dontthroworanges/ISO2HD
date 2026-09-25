@@ -38,7 +38,7 @@ This covers OSx86 / Darwin install discs: an Apple partition map, an HFS+ volume
 What to know:
 - **Drive:** needs 512-byte logical sectors, which almost every USB stick and hard drive has. ISO2HD refuses 4K-native drives rather than write something that won't boot.
 - **Macs:** the patch overwrites Apple's 8-byte driver descriptor header. BIOS PCs don't use it, but Macs may no longer recognise the drive's Apple partition map.
-- **Opting out:** add `-NoBootPatch`, or untick "Make BIOS-bootable" in the GUI, to write the disc byte-for-byte.
+- **Opting out:** add `-NoBootPatch`, or turn off **BIOS boot fix** in the app's Preferences, to write the disc byte-for-byte.
 - **Hardware:** the PC still has to be hardware the disc's kernel supports, just as when booting the DVD.
 
 ### Testing in a virtual machine first
@@ -58,18 +58,26 @@ What to know:
 
 ## Usage
 
-Double-click **`ISO2HD.exe`** to open the GUI. It asks for Administrator rights (UAC) and shows no console window. `ISO2HD.cmd` still works too.
+Double-click **`ISO2HD.exe`** to open the app. It asks for Administrator rights (UAC) and follows the Windows light/dark setting.
+
+- **Disc image:** type a path or click **Browse…**. The image's label, size, file system and BIOS boot result are shown below it. Dragging a file in from Explorer doesn't work, because Windows blocks drag and drop into apps running as Administrator.
+- **Target drive:** only drives that are safe to write to are listed (see **Safety** above).
+- **Preferences:** verify after writing, the BIOS boot fix, erasing the rest of the drive, extra pad sectors, and whether the output section is shown when the app starts. They are saved in `ISO2HD.settings.json` next to the exe.
+- **Burn** asks you to confirm, then shows progress in the window and on the taskbar button. **Cancel** stops between 1 MiB blocks, which leaves an incomplete image on the drive.
+- **Hide output** shrinks the window to just the controls.
 
 About the exe:
-- **Which script it runs:** `ISO2HD.ps1` from its own folder. If you copy the exe somewhere on its own, it runs the copy of the script built into it, extracted to `%LOCALAPPDATA%\ISO2HD`.
-- **After changing `ISO2HD.ps1`:** run `.\Build-Exe.ps1` to refresh the built-in copy. It uses the C# compiler that ships with Windows; nothing else to install. The launcher source is in `launcher\`.
-- **Start-up time:** the very first run of a new build can take longer while antivirus scans it.
+- **Which script it runs:** `ISO2HD.ps1` from its own folder. All the drive and image work is done by the script. If you copy the exe somewhere on its own, it runs the copy of the script built into it, extracted to `%LOCALAPPDATA%\ISO2HD`.
+- **Building it:** run `.\Source\Publish.ps1`. Building needs the .NET 8 SDK or later; people using the exe don't need to install anything. Run it again after changing `ISO2HD.ps1`, to refresh the built-in copy. The app's source is in `Source\ISO2HD`, and the icon artwork (SVG and all sizes) is in `Icons`.
+- **Start-up time:** the first run of a new build takes longer while it unpacks to `%TEMP%\.net\ISO2HD` and antivirus scans it.
+
+`ISO2HD.cmd` opens the script's own, simpler window instead.
 
 ## Drive detection and slow USB adapters
 
 ISO2HD lists drives by asking Windows' disk drivers directly. The answers come from information the drivers already hold, so listing usually takes well under a second. It doesn't use the Storage Management service behind `Get-Disk`, which probes every disk and can wait about a minute on a USB-to-SATA adapter that is slow to wake from power saving.
 
-In the GUI:
+In the app:
 - **Background scanning:** drives are scanned in the background, so the window never freezes. If a scan takes more than 5 seconds, ISO2HD says a drive isn't responding. You can wait, or unplug and replug that drive.
 - **Automatic refresh:** the list updates by itself when you plug in or remove a drive. **Refresh** is still there.
 - **Waking the drive:** before writing, ISO2HD reads the drive's first sector to wake it. If the drive is slow to answer, the status line shows how long it has been waiting.
@@ -93,6 +101,7 @@ Other switches:
 - `-NoVerify` skips the verify pass.
 - `-NoBootPatch` writes the disc unmodified, even when a BIOS boot fix is available.
 - `-Force` skips the type-the-disk-number prompt.
+- `-Json` (with `-ListDisks` or `-Inspect`) and `-ReportStatus` / `-CancelEvent` (when writing) are what the app uses to run the script.
 
 Works with Windows PowerShell 5.1 and PowerShell 7+.
 

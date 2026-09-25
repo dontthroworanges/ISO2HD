@@ -1,0 +1,7 @@
+<Project>
+  <PropertyGroup>
+    <!-- Keep build output out of the source folder (hundreds of files). -->
+    <BaseIntermediateOutputPath>$(LOCALAPPDATA)\ISO2HDBuild\obj\$(MSBuildProjectName)\</BaseIntermediateOutputPath>
+    <BaseOutputPath>$(LOCALAPPDATA)\ISO2HDBuild\bin\$(MSBuildProjectName)\</BaseOutputPath>
+  </PropertyGroup>
+</Project>
