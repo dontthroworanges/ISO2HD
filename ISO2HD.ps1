@@ -35,6 +35,8 @@
       * Darwin/x86 install discs (Apple partition map + HFS+ + Darwin cdboot):
         the MBR loads the disc's own Darwin boot2 from 512-byte sectors and
         carries an active type 0xAF partition entry for the HFS+ volume.
+        Chameleon and Clover (CloverEFI boot6/boot7) discs with the same
+        layout are handled the same way.
     Use -NoBootPatch to write the image unmodified.
 
     Run with no parameters to open the graphical interface.
@@ -548,18 +550,19 @@ public static class IsoDiskProbe
 
     function New-DarwinBiosMbr {
         <#
-          Builds a 512-byte MBR for a Darwin/x86 disc written to a 512-byte-sector drive.
+          Builds a 512-byte MBR for a Darwin/x86 or Chameleon disc written to a 512-byte-sector drive.
 
-          Boot code (real mode, loaded at 0000:7C00, DL = BIOS boot drive):
+          Boot code (real mode, loaded at 0000:7C00, DL = BIOS boot drive; uses 386 registers):
             1. Probe INT 13h extensions (AH=41h); fall back to CHS (AH=08h geometry, AH=02h reads).
-            2. Read Boot2Sectors 512-byte sectors starting at Boot2Lba into 2000:0200, one sector
-               at a time with up to 5 attempts each.
+            2. Read Boot2Sectors 512-byte sectors starting at 32-bit Boot2Lba to linear 20200h
+               onward, one sector at a time with up to 5 attempts each. The segment advances
+               20h per sector, so boot2 may be larger than 64 KB.
             3. Jump to 2000:0200 with EDX = boot drive and ES = 0 - the same hand-off the disc's
-               own cdboot stub makes to Darwin boot2.
+               own cdboot stub makes to boot2.
           Partition table: entry 1 is active, type 0xAF (Apple HFS), covering the HFS+ volume.
         #>
         param(
-            [Parameter(Mandatory = $true)][int]$Boot2Lba,
+            [Parameter(Mandatory = $true)][uint32]$Boot2Lba,
             [Parameter(Mandatory = $true)][int]$Boot2Sectors,
             [Parameter(Mandatory = $true)][uint32]$PartStart,
             [Parameter(Mandatory = $true)][uint32]$PartSectors,
@@ -572,6 +575,7 @@ public static class IsoDiskProbe
         $fixups = New-Object System.Collections.Generic.List[object]
         function Emit { foreach ($x in $args) { $code.Add([byte]$x) } }
         function Emit16([int]$Value) { $code.Add([byte]($Value -band 0xFF)); $code.Add([byte](($Value -shr 8) -band 0xFF)) }
+        function Emit32([uint32]$Value) { foreach ($x in [BitConverter]::GetBytes($Value)) { $code.Add($x) } }
         function Mark([string]$Name) { $labels[$Name] = $code.Count }
         function Jr8([int]$Opcode, [string]$Name) { $code.Add([byte]$Opcode); $fixups.Add(@('rel8', $code.Count, $Name, 0)); $code.Add(0) }
         function CallRel([string]$Name) { $code.Add(0xE8); $fixups.Add(@('rel16', $code.Count, $Name, 0)); $code.Add(0); $code.Add(0) }
@@ -617,8 +621,8 @@ public static class IsoDiskProbe
         Mark 'load'
         Emit 0xB8; Emit16 0x2000                    # mov  ax,2000h
         Emit 0x8E 0xC0                              # mov  es,ax
-        Emit 0xBE; Emit16 $Boot2Lba                 # mov  si,boot2 LBA
-        Emit 0xBF; Emit16 0x0200                    # mov  di,0200h
+        Emit 0x66 0xBE; Emit32 $Boot2Lba            # mov  esi,boot2 LBA
+        Emit 0xBF; Emit16 0x0200                    # mov  di,0200h      ; ES:DI = next 512 bytes
         Mark 'next'
         Emit 0xBD; Emit16 5                         # mov  bp,5          ; attempts per sector
         Mark 'retry'
@@ -631,9 +635,11 @@ public static class IsoDiskProbe
         Jr8 0x75 'retry'                            # jnz  retry
         Jr8 0xEB 'fail'                             # jmp  fail
         Mark 'ok'
-        Emit 0x81 0xC7; Emit16 0x0200               # add  di,200h
-        Emit 0x46                                   # inc  si
-        Emit 0x81 0xFE; Emit16 ($Boot2Lba + $Boot2Sectors)  # cmp si,end LBA
+        Emit 0x8C 0xC0                              # mov  ax,es
+        Emit 0x05; Emit16 0x0020                    # add  ax,20h        ; 512 bytes further on
+        Emit 0x8E 0xC0                              # mov  es,ax
+        Emit 0x66 0x46                              # inc  esi
+        Emit 0x66 0x81 0xFE; Emit32 ([uint32]($Boot2Lba + $Boot2Sectors))  # cmp esi,end LBA
         Jr8 0x72 'next'                             # jb   next
 
         Emit 0x8A 0x16; Ref16 'drive'               # mov  dl,[drive]
@@ -658,43 +664,50 @@ public static class IsoDiskProbe
         Emit 0xF4                                   # hlt
         Jr8 0xEB 'halt'                             # jmp  halt
 
-        Mark 'readsec'                              # in: SI = LBA, ES:DI = buffer; out: CF
-        Emit 0x57 0x55 0x56                         # push di / push bp / push si
+        Mark 'readsec'                              # in: ESI = LBA, ES:DI = buffer; out: CF
+        Emit 0x57 0x55 0x66 0x56                    # push di / push bp / push esi
         Emit 0x80 0x3E; Ref16 'edd'; Emit 0x00      # cmp  byte [edd],0
         Jr8 0x74 'readchs'                          # je   readchs
-        Emit 0xC7 0x06; Ref16 'dap' 2; Emit16 1     # mov  word [dap+2],1   ; sector count
         Emit 0x89 0x3E; Ref16 'dap' 4               # mov  [dap+4],di       ; buffer offset
-        Emit 0x89 0x36; Ref16 'dap' 8               # mov  [dap+8],si       ; LBA (low word)
+        Emit 0x8C 0x06; Ref16 'dap' 6               # mov  [dap+6],es       ; buffer segment
+        Emit 0x66 0x89 0x36; Ref16 'dap' 8          # mov  [dap+8],esi      ; LBA (low dword)
         Emit 0x8A 0x16; Ref16 'drive'               # mov  dl,[drive]
         Emit 0xB4 0x42                              # mov  ah,42h
         Emit 0xBE; Ref16 'dap'                      # mov  si,dap
         Emit 0xCD 0x13                              # int  13h
         Jr8 0xEB 'readdone'                         # jmp  readdone
         Mark 'readchs'
-        Emit 0x89 0xF0                              # mov  ax,si
-        Emit 0x31 0xD2                              # xor  dx,dx
-        Emit 0xF7 0x36; Ref16 'spt'                 # div  word [spt]
+        Emit 0x66 0x89 0xF0                         # mov  eax,esi
+        Emit 0x66 0x31 0xD2                         # xor  edx,edx
+        Emit 0x66 0xF7 0x36; Ref16 'spt'            # div  dword [spt]
         Emit 0x42                                   # inc  dx            ; sector (1-based)
         Emit 0x88 0xD1                              # mov  cl,dl
-        Emit 0x31 0xD2                              # xor  dx,dx
-        Emit 0xF7 0x36; Ref16 'heads'               # div  word [heads]
+        Emit 0x66 0x31 0xD2                         # xor  edx,edx
+        Emit 0x66 0xF7 0x36; Ref16 'heads'          # div  dword [heads]
+        Emit 0x66 0x3D; Emit32 1023                 # cmp  eax,1023      ; beyond CHS reach?
+        Jr8 0x77 'chsfar'                           # ja   chsfar
         Emit 0x88 0xD6                              # mov  dh,dl         ; head
-        Emit 0x88 0xC5                              # mov  ch,al         ; cylinder
+        Emit 0x88 0xC5                              # mov  ch,al         ; cylinder bits 0-7
+        Emit 0xC0 0xE4 0x06                         # shl  ah,6
+        Emit 0x08 0xE1                              # or   cl,ah         ; cylinder bits 8-9
         Emit 0x8A 0x16; Ref16 'drive'               # mov  dl,[drive]
         Emit 0x89 0xFB                              # mov  bx,di
         Emit 0xB8; Emit16 0x0201                    # mov  ax,0201h      ; read 1 sector
         Emit 0xCD 0x13                              # int  13h
+        Jr8 0xEB 'readdone'                         # jmp  readdone
+        Mark 'chsfar'
+        Emit 0xF9                                   # stc
         Mark 'readdone'
-        Emit 0x5E 0x5D 0x5F                         # pop  si / pop bp / pop di
+        Emit 0x66 0x5E 0x5D 0x5F                    # pop  esi / pop bp / pop di
         Emit 0xC3                                   # ret
 
         Mark 'drive'; Emit 0
         Mark 'edd'; Emit 0
-        Mark 'spt'; Emit16 0
-        Mark 'heads'; Emit16 0
-        Mark 'dap'; Emit 0x10 0; Emit16 1; Emit16 0; Emit16 0x2000; Emit 0 0 0 0 0 0 0 0
+        Mark 'spt'; Emit32 0
+        Mark 'heads'; Emit32 0
+        Mark 'dap'; Emit 0x10 0; Emit16 1; Emit16 0; Emit16 0; Emit 0 0 0 0 0 0 0 0
         Mark 'message'
-        foreach ($c in [System.Text.Encoding]::ASCII.GetBytes("ISO2HD: cannot load Darwin boot2")) { $code.Add($c) }
+        foreach ($c in [System.Text.Encoding]::ASCII.GetBytes("ISO2HD: cannot load boot2")) { $code.Add($c) }
         Emit 0
 
         foreach ($f in $fixups) {
@@ -747,11 +760,13 @@ public static class IsoDiskProbe
             $be32 = { param($b, $o) [uint32]((([long]$b[$o]) -shl 24) -bor (([long]$b[$o + 1]) -shl 16) -bor (([long]$b[$o + 2]) -shl 8) -bor $b[$o + 3]) }
             $sha = [System.Security.Cryptography.SHA256]::Create()
 
-            # ---- Darwin/x86: Apple partition map + HFS+ + El Torito cdboot + boot2 ----
+            # ---- Darwin/x86 or Chameleon: Apple partition map + HFS+ + El Torito cdboot + boot2 ----
+            # The driver descriptor may declare 512- or 2048-byte blocks; either way the partition
+            # map read here is the one with 512-byte entries starting at byte 512.
             $s0 = & $readAt 0 1024
             if ($s0[510] -eq 0x55 -and $s0[511] -eq 0xAA) { return $null }      # already has a PC boot record
             if ($ascii.GetString($s0, 0, 2) -ne 'ER' -or $ascii.GetString($s0, 512, 2) -ne 'PM') { return $null }
-            if ((& $be16 $s0 2) -ne 512) { return $null }
+            if ((& $be16 $s0 2) -notin 512, 2048) { return $null }
 
             $pvd = & $readAt (16 * 2048) 2048
             $brvd = & $readAt (17 * 2048) 2048
@@ -776,16 +791,37 @@ public static class IsoDiskProbe
                 $files[$name] = @([BitConverter]::ToUInt32($dir, $o + 2), [BitConverter]::ToUInt32($dir, $o + 10))
                 $o += $len
             }
-            if (-not ($files.ContainsKey('CDBOOT') -and $files.ContainsKey('BOOT'))) { return $null }
-            if ($files['CDBOOT'][0] -ne $loadRba) { return $null }
-            $bootLba = [long]$files['BOOT'][0]
-            $bootSize = [int]$files['BOOT'][1]
-            if ($bootSize -le 0 -or $bootSize -gt 127 * 512) { return $null }
+            # The El Torito image (cdboot, which may be hidden from the directory) is a 2048-byte
+            # stub that loads the boot2 following it to 2000:0200. boot2's length is taken from
+            # a root BOOT file identical to that boot2 or, failing that, from the size field a
+            # Chameleon cdboot stub keeps in its last 4 bytes (read by the same rules it applies).
+            $stub = & $readAt ([long]$loadRba * 2048) 2048
+            $bootSize = 0
+            if ($files.ContainsKey('BOOT')) {
+                $size = [long]$files['BOOT'][1]
+                if ($size -gt 0 -and $size -le 0x9F000 - 0x20200) {
+                    $bootFile = & $readAt ([long]$files['BOOT'][0] * 2048) ([int]$size)
+                    $cdTail = & $readAt ([long]$loadRba * 2048 + 2048) ([int]$size)
+                    if ([BitConverter]::ToString($sha.ComputeHash($bootFile)) -eq [BitConverter]::ToString($sha.ComputeHash($cdTail))) {
+                        $bootSize = [int]$size
+                    }
+                }
+            }
+            if (-not $bootSize -and $ascii.GetString($stub).IndexOf('cdboot: ') -ge 0 -and
+                [BitConverter]::ToString($stub).IndexOf('EA-00-02-00-20') -ge 0) {
+                $size = [BitConverter]::ToUInt32($stub, 0x7FC)
+                if ($size -eq 0 -or $size -eq 0xDEADFACE -or $size -gt 0x6FE00) { $size = 0xFE00 }
+                $bootSize = [int]$size
+            }
+            # boot2 is loaded at 2000:0200 and must end below the EBDA at 9F000h.
+            if ($bootSize -le 0 -or $bootSize -gt 0x9F000 - 0x20200) { return $null }
+            $bootLba = [long]$loadRba + 1
             $boot2 = & $readAt ($bootLba * 2048) $bootSize
-            if ($ascii.GetString($boot2).IndexOf('Darwin/x86 boot') -lt 0) { return $null }
-            # cdboot = 2048-byte stub + this exact boot2; that is what the CD path runs.
-            $cdTail = & $readAt ([long]$loadRba * 2048 + 2048) $bootSize
-            if ([BitConverter]::ToString($sha.ComputeHash($boot2)) -ne [BitConverter]::ToString($sha.ComputeHash($cdTail))) { return $null }
+            $boot2Text = $ascii.GetString($boot2)
+            if ($boot2Text.IndexOf('Chameleon') -ge 0) { $kind = 'Chameleon' }     # Chimera builds say both
+            elseif ($boot2Text.IndexOf('Darwin/x86 boot') -ge 0) { $kind = 'Darwin/x86' }
+            elseif ($boot2Text.IndexOf('Clover revision: ') -ge 0) { $kind = 'Clover' }   # CloverEFI boot6/boot7
+            else { return $null }
 
             $part = $null
             $mapEntries = & $be32 $s0 516
@@ -806,18 +842,18 @@ public static class IsoDiskProbe
             if (-not $part) { return $null }
             if (([long]$part[0] + $part[1]) -gt [uint32]::MaxValue) { return $null }
 
-            $boot2Lba = [int]($bootLba * 4)
+            $boot2Lba = [uint32]($bootLba * 4)
             $boot2Sectors = [int][Math]::Ceiling($bootSize / 512)
-            if ($boot2Lba + $boot2Sectors -gt 0xFFFF) { return $null }
+            if ([long]$boot2Lba + $boot2Sectors -gt [uint32]::MaxValue) { return $null }
             $diskSig = [uint32]$part[3]
             if ($diskSig -eq 0) { $diskSig = [uint32]0x4F534932 }
             $mbr = New-DarwinBiosMbr -Boot2Lba $boot2Lba -Boot2Sectors $boot2Sectors -PartStart $part[0] `
                 -PartSectors $part[1] -DiskSignature $diskSig -ForceChs:$ForceChs
 
             [pscustomobject]@{
-                Kind             = 'Darwin/x86'
-                Description      = ("MBR loads Darwin boot2 from 512-byte sectors {0}-{1}; active type 0xAF partition '{2}' at sector {3}, {4} sectors" -f
-                    $boot2Lba, ($boot2Lba + $boot2Sectors - 1), $part[2], $part[0], $part[1])
+                Kind             = $kind
+                Description      = ("MBR loads {0} boot2 from 512-byte sectors {1}-{2}; active type 0xAF partition '{3}' at sector {4}, {5} sectors" -f
+                    $kind, $boot2Lba, ($boot2Lba + $boot2Sectors - 1), $part[2], $part[0], $part[1])
                 Boot2Lba         = $boot2Lba
                 Boot2Sectors     = $boot2Sectors
                 PartitionStart   = [uint32]$part[0]

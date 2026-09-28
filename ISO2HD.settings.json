@@ -1,0 +1,8 @@
+{
+  "IsoPath": "C:\\Users\\danth\\Downloads\\Clover-5175-X64.iso\\Clover-5175-X64.iso",
+  "Verify": false,
+  "BootPatch": true,
+  "ZeroRemainder": false,
+  "PadSectors": 0,
+  "ShowOutput": true
+}

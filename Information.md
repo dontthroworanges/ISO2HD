@@ -25,13 +25,13 @@ A legacy (non-UEFI) BIOS boots a hard drive by running the MBR in its first sect
 | `BiosBoot` shows | What ISO2HD does |
 |---|---|
 | `Hybrid MBR - boots from a hard drive as-is` | Nothing extra. Most Linux ISOs are like this. |
-| `Darwin/x86 - ISO2HD adds a BIOS boot record` | Replaces **only the first 512 bytes** with a PC boot record. Everything else still matches the disc. |
+| `Darwin/x86 - ISO2HD adds a BIOS boot record`<br>`Chameleon - ISO2HD adds a BIOS boot record`<br>`Clover - ISO2HD adds a BIOS boot record` | Replaces **only the first 512 bytes** with a PC boot record. Everything else still matches the disc. |
 | `CD-only - will not boot from a hard drive` | Writes the image unchanged and warns you. There's no boot fix for this kind of disc yet. |
 
-### Darwin/x86 boot fix
-This covers OSx86 / Darwin install discs: an Apple partition map, an HFS+ volume, and an El Torito `CDBOOT` that is a 2048-byte stub followed by Darwin `boot`. ISO2HD's MBR does what `CDBOOT`'s stub does on a CD, but counted in 512-byte sectors:
+### Darwin/x86 and Chameleon boot fix
+This covers OSx86 / Darwin install discs, and later distros that boot with Chameleon (for example Niresh's Mavericks, or tonymacx86's iBoot, which boots with Chimera), plus Clover legacy-BIOS ISOs, whose "boot2" is CloverEFI (`boot6`). They have an Apple partition map, an HFS+ volume, and an El Torito boot image that is a 2048-byte stub followed by boot2. The boot image may be a visible `CDBOOT` file or hidden. boot2's length comes from a matching `BOOT` file in the disc's root folder, or, for a Chameleon stub, from the size the stub stores in its last 4 bytes. ISO2HD's MBR does what that stub does on a CD, but counted in 512-byte sectors:
 
-1. It reads the disc's own Darwin boot2 (the `BOOT` file). It uses INT 13h extensions when available and falls back to CHS otherwise.
+1. It reads the disc's own boot2 (the `BOOT` file), which can be up to about 500 KB and anywhere on the drive. It uses INT 13h extensions when available and falls back to CHS otherwise.
 2. It jumps to boot2 the same way the CD stub does.
 3. It includes one active partition entry, type `0xAF` (Apple HFS), covering the HFS+ volume. boot2 and the kernel use it to find the install volume.
 
