@@ -9,8 +9,7 @@ namespace Iso2Hd;
 /// <summary>The About box contents, shown in a <see cref="DialogWindow"/>.</summary>
 public sealed partial class AboutPanel : UserControl
 {
-    // Placeholder until the project is published; replace with the repository URL.
-    private const string GitHubUrl = "https://github.com/";
+    private const string GitHubUrl = "https://github.com/dontthroworanges/ISO2HD";
 
     public AboutPanel()
     {
