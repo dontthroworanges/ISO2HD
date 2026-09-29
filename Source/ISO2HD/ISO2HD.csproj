@@ -10,8 +10,8 @@
     <Product>ISO2HD</Product>
     <Description>Burn ISO to Hard Drive</Description>
     <!-- Shown in About. Update both for each release. -->
-    <Version>2.0</Version>
-    <ReleaseDate>2026-09-25</ReleaseDate>
+    <Version>2.1</Version>
+    <ReleaseDate>2026-09-28</ReleaseDate>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
     <Platforms>x64</Platforms>
