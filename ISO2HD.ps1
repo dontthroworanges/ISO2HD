@@ -781,16 +781,22 @@ public static class IsoDiskProbe
             $rootLba = [BitConverter]::ToUInt32($pvd, 158)
             $rootLen = [BitConverter]::ToUInt32($pvd, 166)
             if ($rootLen -eq 0 -or $rootLen -gt 1MB) { return $null }
-            $dir = & $readAt ([long]$rootLba * 2048) ([int]$rootLen)
-            $files = @{}
-            $o = 0
-            while ($o -lt $dir.Length) {
-                $len = $dir[$o]
-                if ($len -eq 0) { $o = ([int][Math]::Floor($o / 2048) + 1) * 2048; continue }
-                $name = ($ascii.GetString($dir, $o + 33, $dir[$o + 32]) -replace ';\d+$', '').TrimEnd('.').ToUpperInvariant()
-                $files[$name] = @([BitConverter]::ToUInt32($dir, $o + 2), [BitConverter]::ToUInt32($dir, $o + 10))
-                $o += $len
+            # Directory listing: upper-case name -> @(LBA, size in bytes).
+            $readDir = {
+                param([uint32]$Lba, [uint32]$Length)
+                $dir = & $readAt ([long]$Lba * 2048) ([int]$Length)
+                $entries = @{}
+                $o = 0
+                while ($o -lt $dir.Length) {
+                    $len = $dir[$o]
+                    if ($len -eq 0) { $o = ([int][Math]::Floor($o / 2048) + 1) * 2048; continue }
+                    $name = ($ascii.GetString($dir, $o + 33, $dir[$o + 32]) -replace ';\d+$', '').TrimEnd('.').ToUpperInvariant()
+                    $entries[$name] = @([BitConverter]::ToUInt32($dir, $o + 2), [BitConverter]::ToUInt32($dir, $o + 10))
+                    $o += $len
+                }
+                $entries
             }
+            $files = & $readDir $rootLba $rootLen
             # The El Torito image (cdboot, which may be hidden from the directory) is a 2048-byte
             # stub that loads the boot2 following it to 2000:0200. boot2's length is taken from
             # a root BOOT file identical to that boot2 or, failing that, from the size field a
@@ -822,6 +828,31 @@ public static class IsoDiskProbe
             elseif ($boot2Text.IndexOf('Darwin/x86 boot') -ge 0) { $kind = 'Darwin/x86' }
             elseif ($boot2Text.IndexOf('Clover revision: ') -ge 0) { $kind = 'Clover' }   # CloverEFI boot6/boot7
             else { return $null }
+            $bootName = 'boot2'
+
+            # A Clover CD boots boot6 (CloverEFI with its own SATA/IDE drivers), which hangs after
+            # printing "6" on many older chipsets. Load the disc's boot7 instead when it has one:
+            # the same CloverEFI built with BiosBlockIO, which reads disks through INT 13h.
+            if ($kind -eq 'Clover') {
+                $entry = $null
+                $level = $files
+                foreach ($seg in 'USR', 'STANDALONE', 'I386', 'X64', 'BOOT7') {
+                    $entry = $level[$seg]
+                    if (-not $entry) { break }
+                    if ($seg -ne 'BOOT7') {
+                        if ($entry[1] -eq 0 -or $entry[1] -gt 1MB) { $entry = $null; break }
+                        $level = & $readDir $entry[0] $entry[1]
+                    }
+                }
+                if ($entry -and $entry[1] -gt 0 -and $entry[1] -le 0x9F000 - 0x20200) {
+                    $boot7 = & $readAt ([long]$entry[0] * 2048) ([int]$entry[1])
+                    if ($ascii.GetString($boot7).IndexOf('Clover revision: ') -ge 0) {
+                        $bootLba = [long]$entry[0]
+                        $bootSize = [int]$entry[1]
+                        $bootName = 'boot7'
+                    }
+                }
+            }
 
             $part = $null
             $mapEntries = & $be32 $s0 516
@@ -852,8 +883,8 @@ public static class IsoDiskProbe
 
             [pscustomobject]@{
                 Kind             = $kind
-                Description      = ("MBR loads {0} boot2 from 512-byte sectors {1}-{2}; active type 0xAF partition '{3}' at sector {4}, {5} sectors" -f
-                    $kind, $boot2Lba, ($boot2Lba + $boot2Sectors - 1), $part[2], $part[0], $part[1])
+                Description      = ("MBR loads {0} {6} from 512-byte sectors {1}-{2}; active type 0xAF partition '{3}' at sector {4}, {5} sectors" -f
+                    $kind, $boot2Lba, ($boot2Lba + $boot2Sectors - 1), $part[2], $part[0], $part[1], $bootName)
                 Boot2Lba         = $boot2Lba
                 Boot2Sectors     = $boot2Sectors
                 PartitionStart   = [uint32]$part[0]
