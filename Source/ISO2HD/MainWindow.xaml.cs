@@ -618,7 +618,7 @@ public sealed partial class MainWindow : Window
         StartDiskScan();
     }
 
-    private Task ShowResultAsync(BurnResult r)
+    private async Task ShowResultAsync(BurnResult r)
     {
         var verified = r.Verified
             ? "Verified: the drive reads back exactly what was written."
@@ -630,7 +630,32 @@ public sealed partial class MainWindow : Window
                       $"Time: {r.Elapsed}\n\n" +
                       $"Image SHA-256:\n{r.ImageSha256}\n\n" +
                       "If Windows says the drive needs to be formatted, click Cancel: formatting would erase the image.";
-        return new DialogWindow("Burn complete", MessageText(message), null, "OK", width: 520).ShowAsync(this);
+
+        // Offer Eject when the drive can be safely removed (USB and other hot-plug drives).
+        var diskNumber = _runDisk?.Number ?? -1;
+        var ejectTarget = diskNumber < 0 ? 0u : await Task.Run(() => DeviceEject.FindEjectTarget(diskNumber));
+        var body = new StackPanel { Spacing = 12 };
+        body.Children.Add(MessageText(message));
+        var ejectError = new InfoBar { Severity = InfoBarSeverity.Warning, IsClosable = false, Title = "Could not eject" };
+        body.Children.Add(ejectError);
+
+        var dialog = new DialogWindow("Burn complete", body, ejectTarget != 0 ? "Eject" : null, "OK",
+                                      primaryIsDefault: false, width: 520);
+        dialog.PrimaryButtonClickAsync = async () =>
+        {
+            ejectError.IsOpen = false;
+            var why = await Task.Run(() => DeviceEject.Eject(ejectTarget));
+            if (why == null)
+            {
+                StatusText.Text = $"Disk {diskNumber} ejected - it is safe to unplug";
+                return true;
+            }
+            ejectError.Message = $"Windows refused to eject Disk {diskNumber}: {why}. Close anything using the drive and try again.";
+            ejectError.IsOpen = true;
+            dialog.FitToContent();
+            return false;
+        };
+        await dialog.ShowAsync(this);
     }
 
     private void SetRunning(bool running)

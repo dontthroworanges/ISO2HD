@@ -3,7 +3,7 @@ using System.Text.Json;
 namespace Iso2Hd;
 
 /// <summary>
-/// Preferences stored in ISO2HD.settings.json next to the exe, so the folder stays portable.
+/// Preferences stored in Settings\ISO2HD.settings.json beside the exe, so the folder stays portable.
 /// </summary>
 internal sealed class AppSettings
 {
@@ -11,7 +11,10 @@ internal sealed class AppSettings
 
     // ProcessPath is the real exe location, even for a single-file build that unpacks elsewhere.
     public static string AppDir { get; } = Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory;
-    public static string FilePath => Path.Combine(AppDir, FileName);
+    public static string FilePath => Path.Combine(AppDir, "Settings", FileName);
+
+    // Where earlier versions kept the file: read when the new one doesn't exist yet, removed on the next save.
+    private static string LegacyFilePath => Path.Combine(AppDir, FileName);
 
     public const int MaxPadSectors = 100000;   // the script's range
 
@@ -36,12 +39,13 @@ internal sealed class AppSettings
     {
         error = null;
         var s = new AppSettings();
-        if (File.Exists(FilePath))
+        var path = File.Exists(FilePath) ? FilePath : LegacyFilePath;
+        if (File.Exists(path))
         {
             try
             {
                 // Read leniently so a hand-edited file doesn't stop the app starting.
-                using var doc = JsonDocument.Parse(File.ReadAllText(FilePath));
+                using var doc = JsonDocument.Parse(File.ReadAllText(path));
                 foreach (var p in doc.RootElement.EnumerateObject())
                 {
                     var v = p.Value;
@@ -71,7 +75,10 @@ internal sealed class AppSettings
     {
         try
         {
+            Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
             File.WriteAllText(FilePath, JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
+            try { File.Delete(LegacyFilePath); }
+            catch (Exception) { /* the new file is saved; a leftover old one is harmless */ }
             return null;
         }
         catch (Exception ex)

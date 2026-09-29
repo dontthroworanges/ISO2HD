@@ -1330,6 +1330,85 @@ public sealed class IsoDeviceWatcher : NativeWindow, IDisposable
 '@
     }
 
+    if (-not ('IsoDeviceEject' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+
+// "Safely remove" for a disk: the same Configuration Manager request the notification-area
+// icon makes. It is sent to the nearest removable device node (the USB device, not the disk
+// under it) so Windows flushes caches, dismounts the volumes and powers the port down.
+public static class IsoDeviceEject
+{
+    const int CR_SUCCESS = 0;
+    const uint CM_DRP_CAPABILITIES = 0x10;
+    const uint CM_DEVCAP_REMOVABLE = 0x4;
+
+    [DllImport("cfgmgr32.dll", CharSet = CharSet.Unicode)]
+    static extern int CM_Locate_DevNodeW(out uint devInst, string deviceId, uint flags);
+
+    [DllImport("cfgmgr32.dll")]
+    static extern int CM_Get_Parent(out uint parent, uint devInst, uint flags);
+
+    [DllImport("cfgmgr32.dll", CharSet = CharSet.Unicode)]
+    static extern int CM_Get_DevNode_Registry_PropertyW(uint devInst, uint property, out uint dataType,
+        ref uint buffer, ref uint length, uint flags);
+
+    [DllImport("cfgmgr32.dll", CharSet = CharSet.Unicode)]
+    static extern int CM_Request_Device_EjectW(uint devInst, out int vetoType, StringBuilder vetoName,
+        int nameLength, uint flags);
+
+    static readonly string[] VetoReasons = {
+        "unknown reason", "legacy device", "a driver is waiting to install", "the device is disabled",
+        "legacy driver", "insufficient power", "a program or file is still open on the drive",
+        "the device is in use by Windows", "the driver refused", "insufficient rights",
+        "the device does not support removal", "the drive holds the Windows page file"
+    };
+
+    static bool IsRemovable(uint devInst)
+    {
+        uint type, caps = 0, len = 4;
+        return CM_Get_DevNode_Registry_PropertyW(devInst, CM_DRP_CAPABILITIES, out type, ref caps, ref len, 0) == CR_SUCCESS
+            && (caps & CM_DEVCAP_REMOVABLE) != 0;
+    }
+
+    // Device node to eject for a disk's PnP instance ID; 0 when nothing on its path is removable.
+    public static uint FindEjectTarget(string diskInstanceId)
+    {
+        uint node;
+        if (string.IsNullOrEmpty(diskInstanceId) || CM_Locate_DevNodeW(out node, diskInstanceId, 0) != CR_SUCCESS) return 0;
+        for (int depth = 0; depth < 16; depth++)
+        {
+            if (IsRemovable(node)) return node;
+            uint parent;
+            if (CM_Get_Parent(out parent, node, 0) != CR_SUCCESS) break;
+            node = parent;
+        }
+        return 0;
+    }
+
+    // Returns null on success, otherwise why Windows refused.
+    public static string Eject(uint devInst)
+    {
+        string reason = null;
+        for (int attempt = 0; attempt < 3; attempt++)
+        {
+            if (attempt > 0) System.Threading.Thread.Sleep(750);   // a drive scan may briefly hold a handle
+            int veto;
+            StringBuilder name = new StringBuilder(260);
+            int cr = CM_Request_Device_EjectW(devInst, out veto, name, name.Capacity, 0);
+            if (cr == CR_SUCCESS && veto == 0) return null;
+            reason = cr != CR_SUCCESS ? "Configuration Manager error " + cr
+                : (veto < VetoReasons.Length ? VetoReasons[veto] : "veto type " + veto)
+                  + (name.Length > 0 ? " (" + name + ")" : "");
+        }
+        return reason;
+    }
+}
+'@
+    }
+
     $ui = @{
         Disks = @(); State = $null; Burning = $false; Watcher = $null
         IsoPath = ''; IsoInfo = $null; IsoJob = $null; IsoJobPath = $null
@@ -1599,8 +1678,9 @@ public sealed class IsoDeviceWatcher : NativeWindow, IDisposable
                     Log = New-Object 'System.Collections.Concurrent.ConcurrentQueue[string]'
                 })
             $ui.State = $state
+            $ui.BurnDisk = [int]$d.Number
 
-            $rs = [runspacefactory]::CreateRunspace()
+            $rs =[runspacefactory]::CreateRunspace()
             $rs.Open()
             $vars = @{
                 State = $state; IsoPath = $iso; DiskNumber = [int]$d.Number; Verify = [bool]$chkVerify.Checked
@@ -1617,6 +1697,73 @@ public sealed class IsoDeviceWatcher : NativeWindow, IDisposable
             & $updateControls
             $timer.Start()
         })
+
+    # Burn-complete dialog: the result text plus an Eject button that safely removes the drive.
+    $showBurnComplete = {
+        param([string]$Message, [int]$DiskNumber)
+        $target = [uint32]0
+        try {
+            $pnpId = (Get-CimInstance Win32_DiskDrive -Filter "Index=$DiskNumber" -ErrorAction Stop).PNPDeviceID
+            $target = [IsoDeviceEject]::FindEjectTarget($pnpId)
+        } catch { }
+
+        $dlg = New-Object System.Windows.Forms.Form
+        $dlg.Text = 'ISO2HD'
+        $dlg.FormBorderStyle = 'FixedDialog'
+        $dlg.MinimizeBox = $false
+        $dlg.MaximizeBox = $false
+        $dlg.ShowInTaskbar = $false
+        $dlg.StartPosition = 'CenterParent'
+        $dlg.Font = $form.Font
+
+        $icon = New-Object System.Windows.Forms.PictureBox
+        $icon.Image = [System.Drawing.SystemIcons]::Information.ToBitmap()
+        $icon.SizeMode = 'AutoSize'
+        $icon.Location = New-Object System.Drawing.Point(16, 16)
+        $text = New-Object System.Windows.Forms.Label
+        $text.Text = $Message
+        $text.AutoSize = $true
+        $text.MaximumSize = New-Object System.Drawing.Size(500, 0)
+        $text.Location = New-Object System.Drawing.Point(60, 16)
+        $dlg.Controls.Add($text)
+        $width = [Math]::Max(360, $text.PreferredSize.Width + 76)
+        $buttonsY = [Math]::Max(56, $text.PreferredSize.Height + 32)
+        $dlg.ClientSize = New-Object System.Drawing.Size($width, ($buttonsY + 44))
+        $btnEject = New-Object System.Windows.Forms.Button
+        $btnEject.Text = 'Eject'
+        $btnEject.Size = New-Object System.Drawing.Size(90, 28)
+        $btnEject.Location = New-Object System.Drawing.Point(($width - 202), $buttonsY)
+        $btnEject.Visible = ($target -ne 0)   # only removable drives (USB and other hot-plug) can be ejected
+        $btnOk = New-Object System.Windows.Forms.Button
+        $btnOk.Text = 'OK'
+        $btnOk.Size = New-Object System.Drawing.Size(90, 28)
+        $btnOk.Location = New-Object System.Drawing.Point(($width - 106), $buttonsY)
+        $btnOk.DialogResult = 'OK'
+        $tip = New-Object System.Windows.Forms.ToolTip
+        $tip.SetToolTip($btnEject, "Safely remove Disk $DiskNumber so it can be unplugged")
+        $dlg.Controls.AddRange(@($icon, $btnEject, $btnOk))
+        $dlg.AcceptButton = $btnOk
+        $dlg.CancelButton = $btnOk
+
+        $btnEject.Add_Click({
+                $dlg.UseWaitCursor = $true
+                $btnEject.Enabled = $false
+                $why = [IsoDeviceEject]::Eject($target)
+                $dlg.UseWaitCursor = $false
+                if ($null -eq $why) {
+                    $lblStatus.Text = "Burn complete. Disk $DiskNumber was ejected - it is safe to unplug."
+                    $dlg.Close()
+                } else {
+                    $btnEject.Enabled = $true
+                    [void][System.Windows.Forms.MessageBox]::Show($dlg,
+                        "Windows could not eject Disk ${DiskNumber}: $why.`r`n`r`nClose anything using the drive and try again.",
+                        'Eject failed', 'OK', 'Warning')
+                }
+            })
+        [void]$dlg.ShowDialog($form)
+        $tip.Dispose()
+        $dlg.Dispose()
+    }
 
     $timer = New-Object System.Windows.Forms.Timer
     $timer.Interval = 200
@@ -1659,9 +1806,7 @@ public sealed class IsoDeviceWatcher : NativeWindow, IDisposable
                     $progress.Value = 100
                     $lblStatus.Text = 'Burn complete.'
                     $v = if ($r.Verified) { 'Verified OK' } else { 'Not verified' }
-                    [void][System.Windows.Forms.MessageBox]::Show($form,
-                        "Burn complete ($v).`r`n`r`nTrack: $($r.TrackSectors) sectors, $($r.BytesWritten) bytes`r`nImage SHA-256:`r`n$($r.ImageSha256)",
-                        'ISO2HD', 'OK', 'Information')
+                    & $showBurnComplete "Burn complete ($v).`r`n`r`nTrack: $($r.TrackSectors) sectors, $($r.BytesWritten) bytes`r`nImage SHA-256:`r`n$($r.ImageSha256)" $ui.BurnDisk
                 }
                 & $startDiskScan
             }

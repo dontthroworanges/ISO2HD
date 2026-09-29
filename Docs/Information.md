@@ -62,8 +62,9 @@ Double-click **`ISO2HD.exe`** to open the app. It asks for Administrator rights 
 
 - **Disc image:** type a path or click **Browse…**. The image's label, size, file system and BIOS boot result are shown below it. Dragging a file in from Explorer doesn't work, because Windows blocks drag and drop into apps running as Administrator.
 - **Target drive:** only drives that are safe to write to are listed (see **Safety** above).
-- **Preferences:** verify after writing, the BIOS boot fix, erasing the rest of the drive, extra pad sectors, and whether the output section is shown when the app starts. They are saved in `ISO2HD.settings.json` next to the exe.
+- **Preferences:** verify after writing, the BIOS boot fix, erasing the rest of the drive, extra pad sectors, and whether the output section is shown when the app starts. They are saved in `Settings\ISO2HD.settings.json` next to the exe.
 - **Burn** asks you to confirm, then shows progress in the window and on the taskbar button. **Cancel** stops between 1 MiB blocks, which leaves an incomplete image on the drive.
+- **Eject**, in the "Burn complete" message, safely removes the drive (the same as **Safely Remove Hardware** in the notification area), so it can be unplugged straight away. It is only offered for removable drives such as USB. If a program still has the drive open, Windows refuses and the message says why.
 - **Hide output** shrinks the window to just the controls.
 
 About the exe:
@@ -71,7 +72,7 @@ About the exe:
 - **Building it:** run `.\Source\Publish.ps1`. Building needs the .NET 8 SDK or later; people using the exe don't need to install anything. Run it again after changing `ISO2HD.ps1`, to refresh the built-in copy. The app's source is in `Source\ISO2HD`, and the icon artwork (SVG and all sizes) is in `Icons`.
 - **Start-up time:** the first run of a new build takes longer while it unpacks to `%TEMP%\.net\ISO2HD` and antivirus scans it.
 
-`ISO2HD.cmd` opens the script's own, simpler window instead.
+`Tools\ISO2HD.cmd` opens the script's own, simpler window instead.
 
 ## Drive detection and slow USB adapters
 

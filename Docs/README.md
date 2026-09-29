@@ -18,4 +18,4 @@ All that being said, if you've come across this tool while searching for somethi
 > I have successfully installed iAtkos v7 and OSXx86 10.4.11 on my Socket 775 Asrock motherboard using drives made with ISO2HD. 
 
 ### Screenshot
-![Screenshot of the ISO2HD user interface](/ISO2HD_Screenshot.png)
+![Screenshot of the ISO2HD user interface](ISO2HD_Screenshot.png)

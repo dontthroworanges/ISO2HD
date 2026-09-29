@@ -27,6 +27,9 @@ public sealed partial class DialogWindow : Window
     /// <summary>Called when the primary button is clicked; return false to keep the dialog open.</summary>
     public Func<bool>? PrimaryButtonClick { get; set; }
 
+    /// <summary>Like <see cref="PrimaryButtonClick"/> for work that takes a while; the buttons are disabled until it finishes.</summary>
+    public Func<Task<bool>>? PrimaryButtonClickAsync { get; set; }
+
     /// <param name="primaryText">Accent button text, or null for a single close button.</param>
     /// <param name="width">Width in device-independent pixels; the height fits the content.</param>
     public DialogWindow(string title, UIElement content, string? primaryText, string closeText,
@@ -70,14 +73,18 @@ public sealed partial class DialogWindow : Window
 
     private void Root_Loaded(object sender, RoutedEventArgs e)
     {
-        // Size the window to its content, then center it over the owner.
+        FitToContent();
+        (_primaryIsDefault ? PrimaryButton : CloseButton).Focus(FocusState.Programmatic);
+    }
+
+    /// <summary>Sizes the window to its content and centers it over the owner; call again after the content changes.</summary>
+    public void FitToContent()
+    {
+        if (_owner == null || Root.XamlRoot == null) return;
         var scale = Root.XamlRoot.RasterizationScale;
         Root.Measure(new Size(_width, double.PositiveInfinity));
         var frame = AppWindow.Size.Height - AppWindow.ClientSize.Height;
-        if (_owner != null)
-            PlaceOverOwner(_owner, (int)Math.Ceiling(_width * scale), (int)Math.Ceiling(Root.DesiredSize.Height * scale) + frame);
-
-        (_primaryIsDefault ? PrimaryButton : CloseButton).Focus(FocusState.Programmatic);
+        PlaceOverOwner(_owner, (int)Math.Ceiling(_width * scale), (int)Math.Ceiling(Root.DesiredSize.Height * scale) + frame);
     }
 
     private void PlaceOverOwner(Window owner, int width, int height)
@@ -92,9 +99,17 @@ public sealed partial class DialogWindow : Window
         AppWindow.MoveAndResize(new RectInt32(x, y, width, height));
     }
 
-    private void Primary_Click(object sender, RoutedEventArgs e)
+    private async void Primary_Click(object sender, RoutedEventArgs e)
     {
-        if (PrimaryButtonClick?.Invoke() == false) return;
+        if (PrimaryButtonClickAsync != null)
+        {
+            PrimaryButton.IsEnabled = CloseButton.IsEnabled = false;
+            bool close;
+            try { close = await PrimaryButtonClickAsync(); }
+            finally { PrimaryButton.IsEnabled = CloseButton.IsEnabled = true; }
+            if (!close) return;
+        }
+        else if (PrimaryButtonClick?.Invoke() == false) return;
         _accepted = true;
         Close();
     }
